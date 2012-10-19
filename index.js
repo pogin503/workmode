@@ -211,7 +211,7 @@ WorkMode.prototype.commandLine = function() {
   var self = this;
   var program = require('commander');
   program
-    .version('0.2.0')
+    .version('0.2.1')
     .option('status', "Tells whether Workmode is active.")
     .option('start', "Enables the black list. Off to work!")
     .option('stop', "Disbles the black list.")

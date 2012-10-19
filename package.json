@@ -1,6 +1,6 @@
 {
   "name": "workmode",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "command line tool for blocking sites to be more productive",
   "main": "workmode",
   "bin": {
