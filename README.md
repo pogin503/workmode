@@ -50,6 +50,17 @@ Status of the workmode
 workmode status
 ```
 
+Import from text file (one domain per line).
+
+```
+workmode import SOURCE
+```
+
+Export balcklist to file or stdout if none provided:
+
+````
+workmode export [target]
+````
 ### LICENSE
   DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
                    Version 2, December 2004

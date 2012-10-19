@@ -8,7 +8,4 @@ var hostsPaths = {
 
 var path = (hostsPaths[process.platform] ||  "/etc/") + "hosts";
 
-new workmode({
-	hostsPath:   path,
-	commandLine: true
-});
+new workmode(path).commandLine();

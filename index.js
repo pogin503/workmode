@@ -2,8 +2,11 @@ var fs = require('fs');
 var puts = require('sys').puts;
 
 var bakExtension = ".bak.workmode"
+  , startTag = "### workmode blacklist start ###"
+  , endTag = "### workmode blacklist end ###"
+  ;
 
-var createIfNeeded = function(file){
+function createIfNeeded (file){
   if (!fs.existsSync(file)){
     try{
       puts("Creating `" + file + "`.");
@@ -16,49 +19,78 @@ var createIfNeeded = function(file){
   }
 }
 
-function WorkMode(options){
-  this.hostsPath = options.hostsPath || hostsPath;
-  this.readHosts(this.hostsPath);
-  if (options.commandLine) this.commandLine();
-  return this;
-}
-
-
-
-WorkMode.prototype.readHosts = function () {
-  createIfNeeded(this.hostsPath);
+function readHosts (hostsPath) {
+  createIfNeeded(hostsPath);
   try {
-    var hosts = fs.readFileSync(this.hostsPath);
+    var hosts = fs.readFileSync(hostsPath);
   } catch (e) {
-      puts('Error while reading hosts file: ' + this.hostsPath);
+      puts('Error while reading hosts file: ' + hostsPath);
       puts(e);    
       process.exit()
   }
-  this.parseHosts(hosts);
+  return hosts.toString();
 };
 
-WorkMode.prototype.writeHosts = function() {
-  var hosts = fs.readFileSync(this.hostsPath);
-  // Create the backup file.
+function backup (source, target) {
+  var hosts = readHosts(source);
   try{
-    fs.writeFileSync( this.hostsPath + bakExtension, hosts);
+    fs.writeFileSync( target, hosts);
   } catch (e){
     puts("The backup file could not be created.")
     puts(e);    
     process.exit()
   }
+}
+
+
+function getSurroundings(hosts){
+  var blStart, blEnd, before, after;
+  blStart = hosts.indexOf(startTag);
+  blEnd = hosts.indexOf(endTag);
+  
+  if(blStart === -1) {
+    // Filter out the entries of the old format (they are extracted in parseHosts).
+    before = hosts.split('\n')
+      .filter(function(line){
+        if (line.match(" # workmode")) {
+          return false;
+        } else {
+          return true;
+        }
+      })
+      .join('\n') + '\n';
+    after = endTag + "\n\n";
+  } else {
+    before = hosts.substring(0,blStart);
+    after = hosts.substring(blEnd);
+  }
+  return {before:before, after:after};
+}
+
+function WorkMode(hostsPath){
+  this.hostsPath = hostsPath || 'hosts';
+  this.parseHosts(readHosts(this.hostsPath))
+  if (this.firstTime) {
+    backup(this.hostsPath, this.hostsPath + bakExtension + ".firstTime");
+    this.writeHosts();
+  }
+  return this;
+}
+
+WorkMode.prototype.writeHosts = function() {
+  backup(this.hostsPath, this.hostsPath + bakExtension);
   var prefix = this.prefix;
-  var list = this.list.map(function(domain){return prefix + "127.0.0.1 " + domain})
-  list.unshift("### workmode blacklist start ###");
+  var list = this.list.map(function(domain){return prefix + "127.0.0.1 " + domain});
+  list.unshift(startTag);
   list.push("");
   list = list.join("\n");
   // Re-read the hosts file in case it has been modified in the mean time.
   // This is overly paranoid, and still not completely bullet-proof, since the 
   // file could be modified between this read and the write that follows, but
   // it's better than nothing.
-  this.readHosts(this.hostsPath);
+  var surr = getSurroundings(readHosts(this.hostsPath));
   try {
-    fs.writeFileSync(this.hostsPath, this.before + list + this.after);
+    fs.writeFileSync(this.hostsPath, surr.before + list + surr.after);
   } catch (e) {
     puts('Error while writing hosts file: `' + this.hostsPath + '`.');
     puts('Fortunately, a backup file had been created: `' + this.hostsPath + bakExtension + '`.');
@@ -69,30 +101,33 @@ WorkMode.prototype.writeHosts = function() {
 
 WorkMode.prototype.parseHosts = function(hosts){
   var blStart, blEnd, before, list, after;
-  hosts = hosts.toString();
-  blStart = hosts.indexOf("### workmode blacklist start ###");
-  blEnd = hosts.indexOf("### workmode blacklist end ###");
+  blStart = hosts.indexOf(startTag);
+  blEnd = hosts.indexOf(endTag);
   
   if(blStart === -1) {
-    this.before = hosts + '\n';
-    list = [];
-    this.after = "### workmode blacklist end ###\n\n";
+    this.firstTime = true;
+    // No blacklist, at least in the new format.
+    // Check for the entries in the old one.
+    list = hosts.split('\n')
+      .filter(function(line){
+        if (line.match(" # workmode")) {
+          return true;
+        } else {
+          return false;
+        }
+      })
+      .map(function(line){
+        return line.replace(/.*127\.0\.0\.1 /,"").replace(/ # workmode.*/,"");
+      });
+      this.prefix = "# ";
+      this.list = list;
+      return;
   } else {
-    this.before = hosts.substring(0,blStart);
     list = hosts.substring(blStart,blEnd).split("\n").slice(1,-1);
-    this.after = hosts.substring(blEnd);
   }
   if (list.length > 0) {
     this.prefix = list[0][0] === '#' ? '# ' : '';
   } else {
-    var hosts = fs.readFileSync(this.hostsPath)
-    try{
-      fs.writeFileSync( this.hostsPath + bakExtension + ".firstTime", hosts);
-    } catch (e){
-      puts("The backup file could not be created.")
-      puts(e);    
-      process.exit()
-    }
     // If the list is empty, we insert the new entries commented out.
     this.prefix = "# ";
   }
@@ -100,7 +135,7 @@ WorkMode.prototype.parseHosts = function(hosts){
   list = list.map(function(line) {
     return line.match(regex)[1];
   });
-  this.list = list;
+    this.list = list;  
 };
 
 WorkMode.prototype.enabled = function () {
@@ -245,6 +280,43 @@ WorkMode.prototype.commandLine = function() {
       process.exit();
     });
   });
+
+  program.on('import', function(src) {
+    src = src[0];
+    if (!src) {
+      puts("Please specify an input file.");
+    } else{
+      fs.readFileSync(src)
+        .toString()
+        .split('\n')
+        .filter(function (line) {
+          if (line.match(/^( |\t)*$/)) return false;
+          else return true;
+        })
+        .map(function (domain) {
+          // Strip white space
+          domain = domain.replace(/ |\t/g,'')
+          // Ensure uniqueness
+          if (self.list.indexOf(domain) === -1){
+          console.log(domain);
+            self.list.push(domain);
+          }
+        });
+      self.writeHosts();
+    }
+  });
+
+  program.on('export', function(dest) {
+    dest = dest[0];
+    var out = self.list.join('\n');
+    if (!dest) {
+      puts(out);
+    } else{
+      puts("exporting to `" + dest +"`.");
+      fs.writeFileSync(dest, out);
+    }
+  });
+
 
   program.on('list', function(){
     puts(self.displayList());
