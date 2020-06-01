@@ -1,10 +1,11 @@
 var fs = require('fs');
 var puts = require('sys').puts;
+var os = require('os');
 
-var bakExtension = ".bak.workmode"
-  , startTag = "### workmode blacklist start ###"
-  , endTag = "### workmode blacklist end ###"
-  ;
+var bakExtension = ".bak.workmode";
+var startTag = "### workmode blacklist start ###";
+var endTag = "### workmode blacklist end ###";
+var eol = 'win32' == os.platform() ? '\r\n' : '\n';
 
 function createIfNeeded (file){
   if (!fs.existsSync(file)){
@@ -17,16 +18,47 @@ function createIfNeeded (file){
       process.exit();
     }
   }
+};
+function convertFormat(hosts) {
+  hosts = hosts.toString();
+  var blockedLocation = hosts.indexOf("#blocked"),
+      list = [],
+      before = hosts.substring(0,blockedLocation),
+      afterArray = hosts.substring(blockedLocation).split(eol),
+      newAfter = [];
+
+  afterArray.forEach( function(line) {
+    if(line.indexOf("127") != -1) {
+      newAfter.push(line);
+    }
+  });
+  var newFormat = ["### workmode blacklist start ###",
+                   newAfter.join(eol),
+                   "### workmode blacklist end ###"];
+
+  return before + newFormat.join(eol);
 }
 
-function readHosts (hostsPath) {
-  createIfNeeded(hostsPath);
+function WorkMode(options){
+  this.hostsPath = options.hostsPath || hostsPath;
+  this.readHosts(this.hostsPath);
+  if (options.commandLine) this.commandLine();
+  return this;
+}
+
+WorkMode.prototype.readHosts = function () {
+  var hosts;
+  createIfNeeded(this.hostsPath);
   try {
-    var hosts = fs.readFileSync(hostsPath);
+    hosts = fs.readFileSync(this.hostsPath, 'utf-8');
+    if(hosts.indexOf("#blocked") !== -1) {
+      hosts = convertFormat(hosts);
+      fs.writeFileSync(this.hostsPath, hosts);
+    }
   } catch (e) {
-      puts('Error while reading hosts file: ' + hostsPath);
-      puts(e);    
-      process.exit()
+      puts('Error while reading hosts file: ' + this.hostsPath);
+      puts(e);
+      process.exit();
   }
   return hosts.toString();
 };
@@ -36,9 +68,9 @@ function backup (source, target) {
   try{
     fs.writeFileSync( target, hosts);
   } catch (e){
-    puts("The backup file could not be created.")
-    puts(e);    
-    process.exit()
+    puts("The backup file could not be created.");
+    puts(e);
+    process.exit();
   }
 }
 
@@ -47,7 +79,7 @@ function getSurroundings(hosts){
   var blStart, blEnd, before, after;
   blStart = hosts.indexOf(startTag);
   blEnd = hosts.indexOf(endTag);
-  
+
   if(blStart === -1) {
     // Filter out the entries of the old format (they are extracted in parseHosts).
     before = hosts.split('\n')
@@ -80,15 +112,19 @@ function WorkMode(hostsPath){
 WorkMode.prototype.writeHosts = function() {
   backup(this.hostsPath, this.hostsPath + bakExtension);
   var prefix = this.prefix;
-  var list = this.list.map(function(domain){return prefix + "127.0.0.1 " + domain});
-  list.unshift(startTag);
+  var list = this.list.map( function (domain) {
+    return prefix + "127.0.0.1 " + domain;
+  });
+  list.unshift("### workmode blacklist start ###");
   list.push("");
-  list = list.join("\n");
+  list = list.join(eol);
   // Re-read the hosts file in case it has been modified in the mean time.
-  // This is overly paranoid, and still not completely bullet-proof, since the 
+  // This is overly paranoid, and still not completely bullet-proof, since the
   // file could be modified between this read and the write that follows, but
   // it's better than nothing.
   var surr = getSurroundings(readHosts(this.hostsPath));
+  // imo program is fast so changes will probably not heppend
+  // this.readHosts(this.hostsPath);
   try {
     fs.writeFileSync(this.hostsPath, surr.before + list + surr.after);
   } catch (e) {
@@ -103,7 +139,7 @@ WorkMode.prototype.parseHosts = function(hosts){
   var blStart, blEnd, before, list, after;
   blStart = hosts.indexOf(startTag);
   blEnd = hosts.indexOf(endTag);
-  
+
   if(blStart === -1) {
     this.firstTime = true;
     // No blacklist, at least in the new format.
@@ -125,21 +161,30 @@ WorkMode.prototype.parseHosts = function(hosts){
   } else {
     list = hosts.substring(blStart,blEnd).split("\n").slice(1,-1);
   }
+
   if (list.length > 0) {
-    this.prefix = list[0][0] === '#' ? '# ' : '';
+    this.prefix = list[0][0] === '#' ? '#' : '';
   } else {
+    hosts = fs.readFileSync(this.hostsPath);
+    try {
+      fs.writeFileSync( this.hostsPath + bakExtension + ".firstTime", hosts);
+    } catch (e) {
+      puts("The backup file could not be created.");
+      puts(e);
+      process.exit();
+    }
     // If the list is empty, we insert the new entries commented out.
-    this.prefix = "# ";
+    this.prefix = "#";
   }
   var regex = new RegExp(this.prefix + "127\\.0\\.0\\.1 (.+)");
   list = list.map(function(line) {
     return line.match(regex)[1];
   });
-    this.list = list;  
+    this.list = list;
 };
 
 WorkMode.prototype.enabled = function () {
-  return !(this.list.length === 0 || this.prefix === "# ");
+  return !(this.list.length === 0 || this.prefix === "#");
 };
 
 WorkMode.prototype.stop = function() {
@@ -147,7 +192,7 @@ WorkMode.prototype.stop = function() {
     return 'The blacklist is empty.';
   }
   if (this.enabled()) {
-    list = this.prefix = "# ";
+    list = this.prefix = "#";
     return 'Workmode is now disabled.';
   } else {
     return "Workblock isn't running.";
@@ -172,7 +217,7 @@ WorkMode.prototype.add = function(domain) {
   } else {
     this.list.push(domain);
     this.list.sort();
-    return "Domain `" + domain + '` has been added to the blacklist.'; 
+    return "Domain `" + domain + '` has been added to the blacklist.';
   }
 
 };
@@ -184,10 +229,10 @@ WorkMode.prototype.displayList = function() {
 
 WorkMode.prototype.remove = function(domain) {
   // param is either a domain or an index.
-  var index, numeric
-  if(parseInt(domain) == domain) {
+  var index, numeric;
+  if(parseInt(domain, 10) == domain) {
     // It's an index.
-    index = parseInt(domain)-1;
+    index = parseInt(domain, 10) - 1;
     domain = this.list[index];
     numeric = true;
   } else {
@@ -195,12 +240,12 @@ WorkMode.prototype.remove = function(domain) {
     numeric = false;
   }
   if(-1 < index && index <= this.list.length) {
-    this.list.splice(index,1)
+    this.list.splice(index,1);
     return "Domain `" + domain + "` has been removed the blacklist.";
   } else {
     return (numeric ? "Index `" + (index + 1) : "Domain `" + domain) + "` was not found in the blacklist.";
   }
-}
+};
 
 function parseError(msg) {
   if (msg[0] !== "$") return false;
@@ -216,9 +261,9 @@ WorkMode.prototype.commandLine = function() {
     .option('start', "Enables the black list. Off to work!")
     .option('stop', "Disbles the black list.")
     .option('add [domain]', "Adds the domain to the black list.")
-    .option('remove [index|domain]', "Removes one the domain at the given index. "
-                                   + "If no parameter is passed, displays the blacklist "
-                                   + "and prompts for one.")
+    .option('remove [index|domain]', ["Removes one the domain at the given index. ",
+                                      "If no parameter is passed, displays the blacklist ",
+                                      "and prompts for one."].join())
     .option('list', 'Displays the blacklist.');
 
   program.on('stop', function() {
@@ -238,7 +283,7 @@ WorkMode.prototype.commandLine = function() {
   });
 
   program.on('status', function() {
-    if (self.list.length == 0) {
+    if (self.list.length === 0) {
       puts('The blacklist is empty.');
     } else if (self.enabled()) {
       puts('Workmode is enabled.');
@@ -253,7 +298,7 @@ WorkMode.prototype.commandLine = function() {
       if (!(error = parseError(msg))) {
         self.writeHosts();
       }
-      puts(error || msg);      
+      puts(error || msg);
     }
     else puts("Please specify a domain.");
   });
@@ -263,13 +308,13 @@ WorkMode.prototype.commandLine = function() {
     if(program.remove !== true) {
       //  Dummy prompt if a parameter was passed.
       prompt = function(_, cb){
-        cb(program.remove)
-      }
+        cb(program.remove);
+      };
     } else {
       prompt = function(msg, cb){
         puts(self.displayList());
-        program.prompt(msg,cb)
-      }
+        program.prompt(msg,cb);
+      };
     }
     prompt('Which domain you want to remove: ', function(remove){
       var error, msg = self.remove(remove);
